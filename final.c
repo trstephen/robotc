@@ -68,6 +68,7 @@ const int THREE_SIXTY_DEG = 1300; // encoder value for turning robot 360 deg
 bool start_button_pushed = false;
 bool debug_button_pushed = false;
 bool spray_button_pushed = false;
+bool kill_switch_flag = false;
 
 /*
 ======================================================
@@ -200,6 +201,7 @@ void sweep_search();
 
 void seek_source();
 
+
 /*
 ======================================================
 =
@@ -207,6 +209,28 @@ void seek_source();
 =
 ======================================================
 */
+
+
+task kill_switch()
+/*
+*	if any button is pressed, all motors are stopped and all other
+*	tasks are stopped. even main().
+*	main() is then restarted with default values for current_state and
+*	kill_switch() ends.
+*/
+{
+	wait1Msec(500);
+	while(true)
+	{
+		//you can't stop a task from within a task (except main) so a helper function executes when this task runs
+		//kill_switch_helper();
+		if(SensorValue(start_button) == true || SensorValue(debug_button) == true || SensorValue(spray_button) == true) stopAllTasks();
+
+		//prevent CPU hogging
+		wait1Msec(50);
+	}/*while*/
+
+}/*kill_switch*/
 
 
 task pulse()
@@ -334,6 +358,7 @@ task main()
 				debug_sensors();
 				break;
 			case(SEARCH):
+				startTask(kill_switch); kill_switch_flag = true;
 				sweep_search();
 				break;
 			case(SEEK):
@@ -353,10 +378,14 @@ task main()
 ======================================================
 */
 
+
 void stop_robot()
 {
 	//stop motors
 	motor(lt_motor) = motor(rt_motor) = motor(spray_motor) = 0;
+
+	//turn off kill switch
+	stopTask(kill_switch); kill_switch_flag = false;
 
 	//turn on standby LED
 	SensorValue(neutralize_led) = true;
