@@ -43,8 +43,6 @@ const int FWD_SPEED_NEAR = 40;
 const int MIN_FWD_SPEED = 10;	// minimum allowable motor speed for forward motion
 const int SWEEP_SPEED_FAST = 30; // wheel turn speed for fast sweeping
 const int SWEEP_SPEED_SLOW = 25; // wheel turn speed for slow sweeping
-//const int REV_SPEED = -35;		// reverse speed
-//const int TURN_SPEED = 35;		// turning speed
 const int SPRAY_SPEED = 30;		// spray motor speed
 #define ONE_M_DIST 1750 		// encoder value for 1 meter
 
@@ -55,12 +53,11 @@ const int SPRAY_SPEED = 30;		// spray motor speed
 ////////////////////////
 */
 const int THREE_SIXTY_DEG = 1300; // encoder value for turning robot 360 deg
-//#define NINETY_DEGREES 200		// encoder value for turning robot 90 deg
 const float DEADBAND_LIMIT = 0.2; // go straight when bearing is < abs(deadband_limit)
 #define TURN_SLOW 20	//when turning, inside wheel turns at this speed
 #define TURN_FAST 35	//when turning, outside wheel turns at this speed
-#define TURN_SLOW_NEAR 10
-#define TURN_FAST_NEAR 20
+#define TURN_SLOW_NEAR 15
+#define TURN_FAST_NEAR 30
 
 /*
 ////////////////////////
@@ -68,9 +65,9 @@ const float DEADBAND_LIMIT = 0.2; // go straight when bearing is < abs(deadband_
 ////////////////////////
 */
 #define IR_REFRESH_RATE 10	//gets new max/min values for IR readings (*10 miliseconds)
-const int FAR_IR_TEST_THRESHOLD = 300;	// debug lights come on when far IR reading is above this value
+const int FAR_IR_TEST_THRESHOLD = 100;	// debug lights come on when far IR reading is above this value
 const int NEAR_IR_TEST_THRESHOLD = 1900; // debug lights come on when near IR reading is above this value
-const float FAR_IR_BALANCE_THRESHOLD = 0.25; // debug lights come on when scaled balance is less than this value
+const float FAR_IR_BALANCE_THRESHOLD = 0.20; // debug lights come on when scaled balance is less than this value
 const float NEAR_IR_BALANCE_THRESHOLD = 0.25; // debug lights come on when scalaned balance is less than this value
 #define FAR_IR_CEILING 800		// when far IR stronger than this value, switch to near IR
 #define NEAR_IR_FLOOR 400 	// when near IR weaker than this value, switch to far IR
@@ -268,7 +265,6 @@ void seek_source_reckoning();
 */
 void turn_linear(int* inside_wheel, int* outside_wheel);
 
-void turn_linear_near(int* inside_wheel, int* outside_wheel);
 
 
 /*
@@ -730,164 +726,108 @@ void sweep_search()
 }/*sweep_search*/
 
 
-//void seek_source()
-//{
-//	//turn on sensors and indicator light
-//	startTask(get_IR);
-//	SensorValue(near_lt_led) = true;
-
-//	//go forward until near sensors are activated
-//	motor[lt_motor] = motor[rt_motor] = FWD_SPEED;
-//	active_sensor = FAR;
-
-//	while(active_sensor == FAR)
-//	{
-//		if(far_lt_IR > FAR_IR_CEILING || far_rt_IR > FAR_IR_CEILING)
-//		{
-//			active_sensor = NEAR;
-//		}/*if*/
-//	}/*while*/
-
-//	SensorValue(near_lt_led) = false;
-//	current_state = STANDBY;
-//	stopTask(get_IR);
-//}/*seek_source*/
-
 void seek_source_reckoning()
 {
 	//turn on sensors and indicator light
 	startTask(get_IR);
-	SensorValue(near_lt_led) = true;
+	SensorValue(far_lt_led) = true;
 	active_sensor = FAR;
 
-	//variables to hold current motor speed
+	//declarations
+	float IR_balance = 0.0;
 	int lt_motor_speed, rt_motor_speed = 0;
+	int current_forward_speed;
+	tSensors balance_led;
 
-  //seek until NEAR sensors activate
-	while(active_sensor == FAR)
+	//navigate until robot has closed to an object
+	while(SensorValue(sonar) >= 20 || active_sensor == FAR)
 	{
 		//check if we're close enough to switch to near sensors
 		if(far_lt_IR > FAR_IR_CEILING || far_rt_IR > FAR_IR_CEILING)
 		{
 			active_sensor = NEAR;
+			SensorValue(near_lt_led) = true;
 		}/*if*/
 
-		//bearing indicates source is to the left
-		if(far_IR_balance_scaled <= -DEADBAND_LIMIT)
+		//determine variables based on which sensor is active
+		if(active_sensor == FAR)
+		{
+			IR_balance = far_IR_balance_scaled;
+			balance_led = far_rt_led;
+			current_forward_speed = FWD_SPEED;
+		}
+		else //use near
+		{
+			IR_balance = near_IR_balance_scaled;
+			balance_led = near_rt_led;
+			current_forward_speed = FWD_SPEED_NEAR;
+		}/*if-else*/
+
+		//turn based on feedback from IR balance
+		if(IR_balance <= -DEADBAND_LIMIT)
 		{
 			//turn left
-			turn_linear(&lt_motor_speed, &rt_motor_speed);
-		}
-		//source is to the right
-		else if(far_IR_balance_scaled >= DEADBAND_LIMIT)
-		{
-			//turn right
 			turn_linear(&rt_motor_speed, &lt_motor_speed);
+			SensorValue(balance_led) = false;
 		}
-		//source is straight ahead
-		else
-		{
-			//go straight
-			lt_motor_speed = rt_motor_speed = FWD_SPEED;
-		}/*if-else*/
-
-		//update motors with new speed
-		motor[lt_motor] = lt_motor_speed;
-		motor[rt_motor] = rt_motor_speed;
-
-	}/*while*/
-
-	while(true)
-	{
-		SensorValue(near_rt_led) = true;
-
-		if(SensorValue(sonar) <= NEUTRALIZE_POSN_SONAR) break;
-
-		//bearing indicates source is to the left
-		if(near_IR_balance_scaled <= -DEADBAND_LIMIT)
-		{
-			//turn left
-			turn_linear_near(&rt_motor_speed, &lt_motor_speed);
-		}
-		//source is to the right
-		else if(near_IR_balance_scaled >= DEADBAND_LIMIT)
+		else if(IR_balance >= DEADBAND_LIMIT)
 		{
 			//turn right
-			turn_linear_near(&lt_motor_speed, &rt_motor_speed);
+			turn_linear(&lt_motor_speed, &rt_motor_speed);
+			SensorValue(balance_led) = false;
 		}
-		//source is straight ahead
 		else
 		{
-			//go straight
-			lt_motor_speed = rt_motor_speed = FWD_SPEED_NEAR;
+			//IR is balanced, go straight
+			lt_motor_speed = rt_motor_speed = current_forward_speed;
+			SensorValue(balance_led) = true;
 		}/*if-else*/
 
 		//update motors with new speed
 		motor[lt_motor] = lt_motor_speed;
 		motor[rt_motor] = rt_motor_speed;
-
 	}/*while*/
 
-	//just stop for now.
-	//later, we'll transition to near mode or something
+	//just assume we're in the right position, for now
 	motor[lt_motor] = motor[rt_motor] = 0;
-	SensorValue(near_lt_led) = SensorValue(near_rt_led) = false;
-	current_state = NEUTRALIZE;
+	SensorValue(far_lt_led) = SensorValue(far_rt_led) = SensorValue(near_lt_led) = SensorValue(near_rt_led) = false;
+	current_state = STANDBY;
 	stopTask(get_IR);
 }/*seek_source_reckoning*/
 
+
 void turn_linear(int* inside_wheel, int* outside_wheel)
 {
-	//a linear function which maps DEADBAND_LIMIT -> 1, full deflection (+/- 1) -> 0
+	float IR_balance, scale;
+	int fast_speed, slow_speed;
 	float full_deflection = 1.0 - DEADBAND_LIMIT;
-	float scale = 0;
-	float turn_amount = ( 1.0 - (full_deflection - (abs(far_IR_balance_scaled) - DEADBAND_LIMIT)/full_deflection ));
+
+	//determine constants based on which sensor is active
+	if(active_sensor == FAR)
+	{
+		IR_balance = far_IR_balance_scaled;
+		fast_speed = TURN_SLOW;
+		slow_speed = TURN_FAST;
+		scale = fast_speed - slow_speed;
+	}
+	else //use near sensors
+	{
+		IR_balance = near_IR_balance_scaled;
+		fast_speed = TURN_FAST_NEAR;
+		slow_speed = TURN_SLOW_NEAR;
+		scale = fast_speed - slow_speed;
+	}
+
+	//a linear function which maps DEADBAND_LIMIT -> 1, full deflection (+/- 1) -> 0
+	float turn_amount = ( 1.0 - (full_deflection - (abs(IR_balance) - DEADBAND_LIMIT)/full_deflection ));
 
 	//inside wheel turns slow
-	scale = FWD_SPEED - TURN_SLOW;
-	*inside_wheel = TURN_SLOW + (turn_amount * scale);
+	*inside_wheel = slow_speed + (int)(turn_amount * scale);
 
 	//outside wheel turns fast
-	scale = FWD_SPEED - TURN_FAST;
-	*outside_wheel = TURN_FAST + (turn_amount * scale);
-
-}/*turn_left_linear*/
-
-void turn_linear_near(int* inside_wheel, int* outside_wheel)
-{
-	//a linear function which maps DEADBAND_LIMIT -> 1, full deflection (+/- 1) -> 0
-	float full_deflection = 1.0 - DEADBAND_LIMIT;
-	float scale = 0;
-	float turn_amount = ( 1.0 - (full_deflection - (abs(near_IR_balance_scaled) - DEADBAND_LIMIT)/full_deflection ));
-
-	//inside wheel turns slow
-	scale = FWD_SPEED_NEAR - TURN_SLOW_NEAR;
-	*inside_wheel = TURN_SLOW_NEAR + (turn_amount * scale);
-
-	//outside wheel turns fast
-	scale = FWD_SPEED_NEAR - TURN_FAST_NEAR;
-	*outside_wheel = TURN_FAST_NEAR + (turn_amount * scale);
+	*outside_wheel = fast_speed + (int)(turn_amount * scale);
 
 }/*turn_linear_near*/
-
-
-//void go_forward()
-//{
-//	//reset encoder and initialize variables
-//	resetMotorEncoder(lt_motor);
-//	int speed_adjust = 0;
-
-//	//monitor encoder for max distance
-//	while (nMotorEncoder(lt_motor) < ONE_M_DIST)
-//		{
-//			//determine distance to near objects from sonar and adjust motor speed
-//			set_speed(&speed_adjust);
-//			//run motors
-//			motor(lt_motor) = motor(rt_motor) = FWD_SPEED - speed_adjust;
-//		};
-
-//	current_state = STANDBY;
-//}/*go_forward*/
 
 
 void set_speed(int* speed_adjust_ptr)
