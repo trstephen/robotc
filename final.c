@@ -22,7 +22,7 @@
 
 /*
 *	MILESTONE 4
-*	This VEX robot seeks an IR source blinking at a frequency of 10Hz.
+*	This VEX robot seeks an IR source blinking at a frequency of 10Hz...
 *	It conducts an initial scan of the area, determines the strongest bearing
 *	and closes to the source. When it reaches the source, it neutralizes it
 *	by activating a motor that sprays a waterbottle.
@@ -104,7 +104,7 @@ const int STOPPING_DIST = 10;	// robot will stop when sonar detects objects with
 */
 #define NUM_SPRAYS	3			// number of times to spray bottle
 #define NEUTRALIZE_IR_THRESHOLD 400 	// when near IR is stronger than this value...																	}
-#define NEUTRALIZE_IR_BALANCE_TOLERANCE  400 // when diff between lt and rt sensors is less than this value...		} begin neutralization
+#define NEUTRALIZE_IR_BALANCE_TOLERANCE  0.2 // when diff between lt and rt sensors is less than this value...		} begin neutralization
 #define NEUTRALIZE_POSN_SONAR 30	// and sonar detects an object close than this value...													}
 
 
@@ -222,6 +222,12 @@ void seek_source();
 */
 void calculate_turn(int* inside_wheel, int* outside_wheel);
 
+/* calculate_turn_exp
+*	same behavior as calculate_turn, but uses an exponential function to calculate
+*	the turn instead of a linear function
+*/
+void calculate_turn_exp(int* inside_wheel, int* outside_wheel);
+
 /* prevent_collision()
 *	slows down the robot in proportion to the sonar reading. if an object is below
 *	a minimum distance the robot will slow its speed to zero.
@@ -235,6 +241,13 @@ void prevent_collision(int* lt_motor_speed, int* rt_motor_speed);
 *	backs up and starts the search over.
 */
 void holding_pattern();
+
+/* center_on_source
+*	robot pivots until balance from selected sensors (near or far) is within
+*	specified tolerance
+*/
+void center_on_source(T_Sensor sensor_pair, float tolerance);
+
 
 /* back_up()
 *	robot reverses for about 50cm
@@ -420,8 +433,6 @@ task get_IR()
 
 task main()
 {
-	while(true) SensorValue(near_lt_led) = SensorValue(near_rt_led) = SensorValue(far_lt_led) = SensorValue(far_rt_led) = SensorValue(neutralize_led) = true;
-	
 	while(true)
 	{
 		switch(current_state)
@@ -498,7 +509,7 @@ void stop_robot()
 
 	//turn off LED, restart IR
 	lights_out();
-	startTask(get_IR)
+	startTask(get_IR);
 
 }/* stop_robot */
 
@@ -516,7 +527,7 @@ void blink_all(int delay_time)
 void lights_out()
 {
 	SensorValue(near_lt_led) = SensorValue(near_rt_led) = SensorValue(far_lt_led) = SensorValue(far_rt_led) = SensorValue(neutralize_led) = false;
-	
+
 }/*lights_out*/
 
 
@@ -546,7 +557,7 @@ void sweep_search()
 		SensorValue(far_lt_led) = true;
 		int max_bearing_score = 0;
 		int bearing_score, max_bearing_encoder_value;
-		
+
 		//sweep slowly increase sensor accuracy
 		motor[lt_motor] = -SWEEP_SPEED_SLOW;
 		motor[rt_motor] = SWEEP_SPEED_SLOW;
@@ -615,12 +626,12 @@ void seek_source()
 	int lt_motor_speed, rt_motor_speed = 0;
 	int current_forward_speed;
 	tSensors balance_led;
-	
+
 	//turn on sensors and indicator light
 	//startTask(get_IR);
 	SensorValue(far_lt_led) = true;
 	active_sensor = FAR;
-	
+
 
 	//navigate until robot has closed to an object
 	while(SensorValue(sonar) >= NEUTRALIZE_POSN_SONAR)
@@ -632,7 +643,7 @@ void seek_source()
 			SensorValue(far_lt_led) = false;
 			SensorValue(near_lt_led) = true;
 		}/*if*/
-		
+
 
 		//determine variables based on which sensor is active
 		if(active_sensor == FAR)
@@ -647,19 +658,19 @@ void seek_source()
 			balance_led = near_rt_led;
 			current_forward_speed = FWD_SPEED_NEAR;
 		}/*if-else*/
-		
+
 
 		//turn based on feedback from IR balance
 		if(IR_balance <= -DEADBAND_LIMIT)
 		{
 			//turn left
-			calculate_turn(&lt_motor_speed, &rt_motor_speed);
+			calculate_turn_exp(&lt_motor_speed, &rt_motor_speed);
 			SensorValue(balance_led) = false;
 		}
 		else if(IR_balance >= DEADBAND_LIMIT)
 		{
 			//turn right
-			calculate_turn(&rt_motor_speed, &lt_motor_speed);
+			calculate_turn_exp(&rt_motor_speed, &lt_motor_speed);
 			SensorValue(balance_led) = false;
 		}
 		else
@@ -668,7 +679,7 @@ void seek_source()
 			lt_motor_speed = rt_motor_speed = current_forward_speed;
 			SensorValue(balance_led) = true;
 		}/*if-else*/
-		
+
 
 		//determine if there are near objects and slow down
 		prevent_collision(&lt_motor_speed, &rt_motor_speed);
@@ -677,7 +688,7 @@ void seek_source()
 		motor[lt_motor] = lt_motor_speed;
 		motor[rt_motor] = rt_motor_speed;
 	}/*while*/
-	
+
 
 	//determine next state based on whether or not IR source is detected
 	if(near_lt_IR < NEUTRALIZE_IR_THRESHOLD && near_rt_IR < NEUTRALIZE_IR_THRESHOLD)
@@ -687,15 +698,16 @@ void seek_source()
 	}
 	else
 	{
-		//all is good
-		current_state = STANDBY;
+		//center robot, if necessary
+		center_on_source(NEAR, NEUTRALIZE_IR_BALANCE_TOLERANCE);
+		current_state = NEUTRALIZE;
 	}/*if-else*/
 
 	//just assume we're in the right position, for now
 	motor[lt_motor] = motor[rt_motor] = 0;
 	lights_out();
 	//stopTask(get_IR);
-	
+
 }/*seek_source*/
 
 
@@ -733,6 +745,45 @@ void calculate_turn(int* inside_wheel, int* outside_wheel)
 
 }/*calculate_turn*/
 
+void calculate_turn_exp(int* inside_wheel, int* outside_wheel)
+{
+	float IR_balance, deadband, scale, turn_amount;
+	float alpha = 5.0;
+	int fast_speed, slow_speed;
+
+	//determine constants based on which sensor is active
+	if(active_sensor == FAR)
+	{
+		IR_balance = far_IR_balance;
+		fast_speed = TURN_FAST;
+		slow_speed = TURN_SLOW;
+		deadband = DEADBAND_LIMIT;
+		scale = fast_speed - slow_speed;
+	}
+	else //use near sensors
+	{
+		IR_balance = near_IR_balance;
+		fast_speed = TURN_SLOW_NEAR;
+		slow_speed = TURN_FAST_NEAR;
+		deadband = DEADBAND_LIMIT_NEAR;
+		scale = fast_speed - slow_speed;
+	}
+
+	if(IR_balance < -deadband){
+		turn_amount =  exp(alpha*(IR_balance + deadband));
+	}else if (IR_balance > deadband){
+		turn_amount = exp(alpha*(-IR_balance + deadband));
+	}else{
+		turn_amount = 0.0;
+	}
+
+	//inside wheel turns slow
+	*inside_wheel = slow_speed + (int)(turn_amount * scale);
+
+	//outside wheel turns fast
+	*outside_wheel = fast_speed + (int)(turn_amount * scale);
+
+}/*calculate_turn*/
 
 void prevent_collision(int* lt_motor_speed, int* rt_motor_speed)
 {
@@ -763,35 +814,72 @@ void holding_pattern()
 	//controls when indicator LEDs turn off
 	int time_chunk = OBSTRUCTION_WAIT_TIME / 3;
 	SensorValue(near_lt_led) = SensorValue(near_rt_led) = SensorValue(far_lt_led) = SensorValue(far_rt_led) = SensorValue(neutralize_led) = true;
-	
+
 	//wait to see if obstruction moves
 	clearTimer(timer2);
 	while(time1(timer2) < OBSTRUCTION_WAIT_TIME)
 	{
 		//if obstruction is gone, keep navigating
-		if(SensorValue(sonar) > STOPPING_DIST)
+		if(SensorValue(sonar) > STOPPING_DIST+5) //prevents being trapped on edge of loop condition
 		{
+			lights_out();
 			current_state = SEEK;
 			return;
 		}
-		
+
 		//turn the LEDs off as the robot waits... because it's cool
 		if(time1(timer2) > time_chunk)
 		{
 			SensorValue(neutralize_led) = false;
 		}
-		else if(time1(timer2) > 2 * time_chunk)
+		if(time1(timer2) > 2*time_chunk)
 		{
-			SensorValue(far_rt_led) = SensorValue(near_rt_led) = false;
-		}/*if-else*/
+			SensorValue(near_lt_led) = SensorValue(near_rt_led) = false;
+		}/*if*/
 	}/*while*/
-	
+
 	//source didn't move -- back up and search again
 	lights_out();
 	back_up();
 	current_state = SEARCH;
-	
+
 }/*holding_pattern()*/
+
+
+void center_on_source(T_Sensor sensor_pair, float tolerance)
+{
+	int IR_balance;
+	if(sensor_pair == FAR)
+	{
+		IR_balance = far_IR_balance;
+	}
+	else
+	{
+		IR_balance = near_IR_balance;
+	}/*if-else*/
+	
+	//if source is already balanced... do nothing
+	if(IR_balance > -tolerance && IR_balance < tolerance) return;
+	
+	//if source is to left of robot...
+	while(IR_balance < -tolerance)
+	{
+		//turn ccw
+		motor[lt_motor] = -SWEEP_SPEED_SLOW;
+		motor[rt_motor] = SWEEP_SPEED_SLOW;
+	}/*while*/
+	
+	//if source is to right of robot...
+	while(IR_balance > tolerance)
+	{
+		//turn cw
+		motor[lt_motor] = SWEEP_SPEED_SLOW;
+		motor[rt_motor] = -SWEEP_SPEED_SLOW
+	}/*while*/
+	
+	motor[lt_motor] = motor[rt_motor] = 0;
+	
+}/*center_on_source*/
 
 
 void back_up()
@@ -888,7 +976,7 @@ void debug_sensors()
 
 		//check for neutralization condition
 		if(
-			near_lt_IR > NEUTRALIZE_POSN_IR && near_rt_IR > NEUTRALIZE_POSN_IR //source is strong...
+			near_lt_IR > 1900 && near_rt_IR > 1900 //source is strong...
 			&&
 			SensorValue(sonar) < NEUTRALIZE_POSN_SONAR	//source is close...
 			)
