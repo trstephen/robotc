@@ -44,7 +44,7 @@
 ////////////////////////
 */
 const int FWD_SPEED = 60;		// forward speed
-const int FWD_SPEED_NEAR = 40;
+const int FWD_SPEED_NEAR = 40;	// speed when in near sensor mode
 const int MIN_FWD_SPEED = 10;	// minimum allowable motor speed for forward motion
 const int SWEEP_SPEED_FAST = 30; // wheel turn speed for fast sweeping
 const int SWEEP_SPEED_SLOW = 25; // wheel turn speed for slow sweeping
@@ -103,9 +103,9 @@ const int STOPPING_DIST = 10;	// robot will stop when sonar detects objects with
 ////////////////////////
 */
 #define NUM_SPRAYS	3			// number of times to spray bottle
-#define NEUTRALIZE_IR_THRESHOLD 400 	// when near IR is stronger than this value...																	}
+#define NEUTRALIZE_IR_THRESHOLD 400 	// when near IR is stronger than this value...								}
 #define NEUTRALIZE_IR_BALANCE_TOLERANCE  0.2 // when diff between lt and rt sensors is less than this value...		} begin neutralization
-#define NEUTRALIZE_POSN_SONAR 30	// and sonar detects an object close than this value...													}
+#define NEUTRALIZE_POSN_SONAR 30	// and sonar detects an object close than this value...							}
 
 
 /*
@@ -131,12 +131,11 @@ bool spray_button_pushed = false;
 
 //strength of signal for each IR phototransistor
 //records difference between up-down cycle
-int far_lt_IR, far_rt_IR,  near_lt_IR, near_rt_IR;
+int far_lt_IR, far_rt_IR, near_lt_IR, near_rt_IR;
 
 //recodes the difference between the left and right readings for sensor pairs
 // < 0 indicates lt is stronger; > 0 indicates rt is stronger
 float far_IR_balance, near_IR_balance;
-//far_IR_balancefloat far_IR_balance_scaled, near_IR_balance_scaled;
 
 
 /*
@@ -209,7 +208,7 @@ void sweep_search();
 void reorient(int target);
 
 /*	seek_source()
-*	seeks the IR source using dead reckoning (i.e. calculate_turn() )for guidance
+*	seeks the IR source using calculate_turn() for guidance
 */
 void seek_source();
 
@@ -229,7 +228,7 @@ void calculate_turn(int* inside_wheel, int* outside_wheel);
 void calculate_turn_exp(int* inside_wheel, int* outside_wheel);
 
 /* prevent_collision()
-*	slows down the robot in proportion to the sonar reading. if an object is below
+*	slows down the robot in proportion to the sonar reading. if an object is closer than
 *	a minimum distance the robot will slow its speed to zero.
 */
 void prevent_collision(int* lt_motor_speed, int* rt_motor_speed);
@@ -246,7 +245,7 @@ void holding_pattern();
 *	robot pivots until balance from selected sensors (near or far) is within
 *	specified tolerance
 */
-void center_on_source(T_Sensor sensor_pair, float tolerance);
+void center_on_source(float* IR_balance, float tolerance);
 
 
 /* back_up()
@@ -300,20 +299,14 @@ void calibrate_sensors();
 task kill_switch()
 /*
 *	if any button is pressed, all motors are stopped and all other
-*	tasks are stopped. even main().
-*	main() is then restarted with default values for current_state and
-*	kill_switch() ends.
+*	tasks are stopped. even main()..
 */
 {
-	wait1Msec(500);
+	wait1Msec(500); //prevent immediately tiggering killswitch once start button is pressed
 	while(true)
 	{
-		//you can't stop a task from within a task (except main) so a helper function executes when this task runs
-		//kill_switch_helper();
 		if(SensorValue(start_button) == true || SensorValue(debug_button) == true || SensorValue(spray_button) == true) stopAllTasks();
-
-		//prevent CPU hogging
-		wait1Msec(50);
+		wait1Msec(50); //prevent CPU hogging
 	}/*while*/
 
 }/*kill_switch*/
@@ -325,7 +318,7 @@ task pulse()
 *	used to indicate the operation of the spray mechanism.
 *	positioning of LEDs on robot is:
 *
-*			(*)						(*)						(*)						(*)						(*)
+*		(*)			(*)			(*)				(*)				(*)
 * 	far_lt_led 	near_lt_led	neutralize_led 	near_rt_led 	far_rt_led
 *
 *	the pattern loops to create the illusion of a pulse moving out from the centre
@@ -354,8 +347,8 @@ task get_IR()
 * the task continuously reads voltage of the divider circuit and keeps track of the
 *	max/min values it sees. every 100ms the max/min are written to global variables and then reset.
 *
-*												far			 near
-*											-------		-------
+*							far			 near
+*						  -------		-------
 *		bias resistor 	= 50k ohm		10k ohm
 *		max detect dist = 300 cm		100 cm
 *		min detect dist = 30 cm 		5 cm (full deflection)
@@ -402,12 +395,10 @@ task get_IR()
 			//update global variables
 			far_lt_IR = max_far_lt_IR - min_far_lt_IR;
 			far_rt_IR = max_far_rt_IR - min_far_rt_IR;
-			//far_IR_balance = far_rt_IR - far_lt_IR;
 			far_IR_balance = (float)(far_rt_IR - far_lt_IR) / (float)(far_rt_IR + far_lt_IR);
 
 			near_lt_IR = max_near_lt_IR - min_near_lt_IR;
 			near_rt_IR = max_near_rt_IR - min_near_rt_IR;
-			//near_IR_balance = near_rt_IR - near_lt_IR;
 			near_IR_balance = (float)(near_rt_IR - near_lt_IR) / (float)(near_rt_IR + near_lt_IR);
 
 			//reset max/min
@@ -533,9 +524,6 @@ void lights_out()
 
 void sweep_search()
 {
-	//turn on sensors
-	//startTask(get_IR);
-
 	//turn ccw until lt sensor above threshold or 360 deg has been swept
 	resetMotorEncoder(lt_motor);
 	while(far_lt_IR < SWEEP_SENSOR_THRESHOLD && nMotorEncoder(lt_motor) > -THREE_SIXTY_DEG)
@@ -548,7 +536,6 @@ void sweep_search()
 	if(nMotorEncoder(lt_motor) <= -THREE_SIXTY_DEG)
 	{
 		//robot did 360 spin and no detection -- go back to standby
-		//stopTask(get_IR);
 		current_state = STANDBY;
 	}
 	else
@@ -614,6 +601,12 @@ void reorient(int target)
 			motor[rt_motor] = SWEEP_SPEED_SLOW;
 		}/*while*/
 	}/*if-else*/
+	
+	/*
+	*	note: using two while loops for control (like in center_on_source)
+	*	results in the first loop triggering the second. The loop stops at 
+	*	the target value then slides past it, triggering the next loop.
+	*/
 
 	motor[lt_motor] = motor[rt_motor] = 0;
 
@@ -624,11 +617,9 @@ void seek_source()
 {
 	float IR_balance = 0.0;
 	int lt_motor_speed, rt_motor_speed = 0;
-	int current_forward_speed;
+	int current_forward_speed, deadband;
 	tSensors balance_led;
 
-	//turn on sensors and indicator light
-	//startTask(get_IR);
 	SensorValue(far_lt_led) = true;
 	active_sensor = FAR;
 
@@ -649,25 +640,27 @@ void seek_source()
 		if(active_sensor == FAR)
 		{
 			IR_balance = far_IR_balance;
+			deadband = DEADBAND_LIMIT;
 			balance_led = far_rt_led;
 			current_forward_speed = FWD_SPEED;
 		}
 		else //use near
 		{
 			IR_balance = near_IR_balance;
+			deadband = DEADBAND_LIMIT_NEAR;
 			balance_led = near_rt_led;
 			current_forward_speed = FWD_SPEED_NEAR;
 		}/*if-else*/
 
 
 		//turn based on feedback from IR balance
-		if(IR_balance <= -DEADBAND_LIMIT)
+		if(IR_balance <= -deadband)
 		{
 			//turn left
 			calculate_turn_exp(&lt_motor_speed, &rt_motor_speed);
 			SensorValue(balance_led) = false;
 		}
-		else if(IR_balance >= DEADBAND_LIMIT)
+		else if(IR_balance >= deadband)
 		{
 			//turn right
 			calculate_turn_exp(&rt_motor_speed, &lt_motor_speed);
@@ -699,14 +692,12 @@ void seek_source()
 	else
 	{
 		//center robot, if necessary
-		center_on_source(NEAR, NEUTRALIZE_IR_BALANCE_TOLERANCE);
+		center_on_source(&near_IR_balance, NEUTRALIZE_IR_BALANCE_TOLERANCE);
 		current_state = NEUTRALIZE;
 	}/*if-else*/
 
-	//just assume we're in the right position, for now
 	motor[lt_motor] = motor[rt_motor] = 0;
 	lights_out();
-	//stopTask(get_IR);
 
 }/*seek_source*/
 
@@ -846,23 +837,14 @@ void holding_pattern()
 }/*holding_pattern()*/
 
 
-void center_on_source(T_Sensor sensor_pair, float tolerance)
+void center_on_source(float* IR_balance, float tolerance)
 {
-	int IR_balance;
-	if(sensor_pair == FAR)
-	{
-		IR_balance = far_IR_balance;
-	}
-	else
-	{
-		IR_balance = near_IR_balance;
-	}/*if-else*/
-	
+
 	//if source is already balanced... do nothing
-	if(IR_balance > -tolerance && IR_balance < tolerance) return;
+	if(*IR_balance >= -tolerance && *IR_balance =< tolerance) return;
 	
 	//if source is to left of robot...
-	while(IR_balance < -tolerance)
+	while(*IR_balance < -tolerance)
 	{
 		//turn ccw
 		motor[lt_motor] = -SWEEP_SPEED_SLOW;
@@ -870,7 +852,7 @@ void center_on_source(T_Sensor sensor_pair, float tolerance)
 	}/*while*/
 	
 	//if source is to right of robot...
-	while(IR_balance > tolerance)
+	while(*IR_balance > tolerance)
 	{
 		//turn cw
 		motor[lt_motor] = SWEEP_SPEED_SLOW;
